@@ -98,6 +98,12 @@
         </div>
       </div>
       <div class="spread">
+        <div class="spread-title">🤖 AI verdict</div>
+        <div id="ai-box" style="background:var(--panel-2); border-radius:10px; padding:14px; margin-bottom:14px;">
+          <div id="ai-verdict" style="font-size:15px; font-weight:500; margin-bottom:6px;">Asking the AI…</div>
+          <div id="ai-reasoning" class="sub" style="line-height:1.5;"></div>
+          <div id="ai-advice" style="font-size:13px; color:var(--accent); margin-top:8px;"></div>
+        </div>
         <div class="spread-title">What each model predicts right now</div>
         <div class="bar"><div class="bar-fill" id="bar" style="width:0%"></div></div>
         <div class="models" id="models"></div>
@@ -232,6 +238,44 @@ async function loadAll(lat, lon) {
 
   $("loc").textContent = `📍 ${lat.toFixed(3)}, ${lon.toFixed(3)} · ${alive.length}/${MODELS.length} models responded`;
   $("content").style.display = "block";
+
+  askAI(lat, lon, alive).catch(e => {
+    $("ai-verdict").textContent = "AI verdict unavailable";
+    $("ai-reasoning").textContent = e.message;
+  });
+}
+
+async function askAI(lat, lon, alive) {
+  const payload = {
+    lat, lon,
+    models: alive.map(m => ({
+      name: m.name,
+      temp_c: m.data.current.temperature_2m,
+      weather_code: m.data.current.weather_code,
+      precip_prob_1h: m.data.hourly.precipitation_probability?.[0] ?? null
+    }))
+  };
+  const r = await fetch("/api/judge", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!r.ok) throw new Error(`AI API returned ${r.status}`);
+  const v = await r.json();
+  if (v.error) throw new Error(v.error);
+
+  $("ai-verdict").textContent = v.verdict || "—";
+  $("ai-reasoning").textContent = v.reasoning || "";
+  $("ai-advice").textContent = v.advice ? "💡 " + v.advice : "";
+
+  if (v.confidence) {
+    const map = { high: "conf-good", medium: "conf-mid", low: "conf-bad" };
+    $("conf").textContent = v.confidence.charAt(0).toUpperCase() + v.confidence.slice(1);
+    $("conf").className = "conf-val " + (map[v.confidence] || "");
+  }
+  if (typeof v.final_temp_c === "number") {
+    $("temp").textContent = fmt(v.final_temp_c, 1);
+  }
 }
 
 function getLocation() {
