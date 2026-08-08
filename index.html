@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Ensemble Weather — honest forecast for your exact spot</title>
+<meta name="description" content="A weather app that shows model disagreement as uncertainty. Powered by Open-Meteo ensemble forecasts." />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌦️</text></svg>" />
+<style>
+  :root {
+    --bg: #0b1020;
+    --panel: #141a2e;
+    --panel-2: #1c243c;
+    --text: #e8ecf7;
+    --dim: #8a94b0;
+    --accent: #7cc4ff;
+    --warn: #ffb454;
+    --good: #7cffb4;
+    --bad: #ff7c9c;
+    --border: #26304d;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f4f6fb;
+      --panel: #ffffff;
+      --panel-2: #eef1f8;
+      --text: #0e1428;
+      --dim: #5b6480;
+      --accent: #0b6bcb;
+      --warn: #a05a00;
+      --good: #0a7a3f;
+      --bad: #b32448;
+      --border: #d9dfec;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
+  body { min-height: 100vh; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 24px 20px 80px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; flex-wrap: wrap; gap: 8px; }
+  h1 { font-size: 22px; margin: 0; font-weight: 600; letter-spacing: -0.01em; }
+  .sub { color: var(--dim); font-size: 13px; }
+  .loc { color: var(--dim); font-size: 13px; margin-bottom: 20px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 20px; margin-bottom: 16px; }
+  .now { display: grid; grid-template-columns: 1fr auto; gap: 20px; align-items: center; }
+  .temp { font-size: 64px; font-weight: 300; letter-spacing: -0.03em; line-height: 1; }
+  .temp .unit { font-size: 24px; color: var(--dim); margin-left: 4px; }
+  .cond { color: var(--dim); font-size: 15px; margin-top: 6px; }
+  .conf { text-align: right; }
+  .conf-label { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.05em; }
+  .conf-val { font-size: 20px; font-weight: 600; margin-top: 4px; }
+  .conf-good { color: var(--good); }
+  .conf-mid { color: var(--warn); }
+  .conf-bad { color: var(--bad); }
+  .spread { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border); }
+  .spread-title { font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; }
+  .bar { position: relative; height: 8px; background: var(--panel-2); border-radius: 4px; overflow: hidden; margin: 8px 0; }
+  .bar-fill { position: absolute; height: 100%; background: linear-gradient(90deg, var(--accent), var(--warn)); border-radius: 4px; }
+  .models { display: grid; gap: 6px; margin-top: 12px; }
+  .model-row { display: grid; grid-template-columns: 1fr auto; gap: 12px; font-size: 13px; color: var(--dim); }
+  .model-row b { color: var(--text); font-weight: 500; }
+  .hourly { overflow-x: auto; padding-bottom: 8px; }
+  .hourly-track { display: flex; gap: 10px; min-width: min-content; }
+  .hour { flex: 0 0 auto; text-align: center; padding: 12px 10px; border-radius: 10px; background: var(--panel-2); min-width: 62px; }
+  .hour-t { font-size: 11px; color: var(--dim); }
+  .hour-v { font-size: 16px; font-weight: 500; margin: 6px 0 2px; }
+  .hour-r { font-size: 10px; color: var(--accent); }
+  .why { font-size: 13px; color: var(--dim); line-height: 1.6; }
+  .why b { color: var(--text); font-weight: 500; }
+  button { background: var(--accent); color: var(--bg); border: 0; padding: 12px 20px; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .err { color: var(--bad); font-size: 14px; margin-top: 8px; }
+  .footer { color: var(--dim); font-size: 12px; text-align: center; margin-top: 40px; }
+  .footer a { color: var(--accent); text-decoration: none; }
+  .skeleton { color: var(--dim); }
+  code { background: var(--panel-2); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>🌦️ Ensemble Weather</h1>
+    <span class="sub">honest forecasts, with uncertainty</span>
+  </header>
+  <div class="loc" id="loc">Getting your location…</div>
+
+  <div id="content" style="display:none">
+    <div class="card">
+      <div class="now">
+        <div>
+          <div class="temp"><span id="temp">—</span><span class="unit">°C</span></div>
+          <div class="cond" id="cond">—</div>
+        </div>
+        <div class="conf">
+          <div class="conf-label">Confidence</div>
+          <div class="conf-val" id="conf">—</div>
+          <div class="sub" id="spread-txt">—</div>
+        </div>
+      </div>
+      <div class="spread">
+        <div class="spread-title">What each model predicts right now</div>
+        <div class="bar"><div class="bar-fill" id="bar" style="width:0%"></div></div>
+        <div class="models" id="models"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="spread-title" style="margin-bottom:12px">Next 24 hours (mean of all models)</div>
+      <div class="hourly"><div class="hourly-track" id="hourly"></div></div>
+    </div>
+
+    <div class="card">
+      <div class="spread-title" style="margin-bottom:10px">Why this is different</div>
+      <p class="why">
+        Most weather apps show you <b>one number</b> — the output of one model, or a hidden blend of a few, presented as if it were the truth.
+        This app queries <b>multiple independent weather models</b> at your exact GPS location and shows you where they <b>agree</b> and where they <b>disagree</b>.
+        When forecasts are consistent, confidence is <b>high</b>. When models diverge — usually near storms, fronts, or in complex terrain — confidence drops, and you should trust the forecast less.
+      </p>
+      <p class="why" style="margin-top:12px">
+        Models used: <b>GFS</b> (USA), <b>ECMWF IFS</b> (Europe — often considered the world's best), <b>ICON</b> (Germany), <b>GEM</b> (Canada), <b>MetNo Nordic</b>.
+        Data via the free <a href="https://open-meteo.com" style="color:var(--accent)">Open-Meteo</a> API. No sensor fusion yet — coming in v2.
+      </p>
+    </div>
+  </div>
+
+  <div id="err-box" class="err"></div>
+  <div id="perm-box" style="display:none">
+    <p class="why">This app needs your location to fetch weather for your spot.</p>
+    <button id="perm-btn">Share location</button>
+  </div>
+
+  <div class="footer">
+    Built by <a href="https://shreyas.uk">Shreyas</a> · <a href="https://github.com/Shreyas-Profile/weather-app">source on GitHub</a>
+  </div>
+</div>
+
+<script>
+const MODELS = [
+  { key: "gfs_seamless",       name: "GFS (USA)" },
+  { key: "ecmwf_ifs025",       name: "ECMWF (Europe)" },
+  { key: "icon_seamless",      name: "ICON (Germany)" },
+  { key: "gem_seamless",       name: "GEM (Canada)" },
+  { key: "metno_seamless",     name: "MetNo (Nordic)" },
+];
+
+const WMO = {
+  0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
+  45: "Fog", 48: "Rime fog",
+  51: "Light drizzle", 53: "Drizzle", 55: "Heavy drizzle",
+  61: "Light rain", 63: "Rain", 65: "Heavy rain",
+  71: "Light snow", 73: "Snow", 75: "Heavy snow",
+  77: "Snow grains", 80: "Light showers", 81: "Showers", 82: "Heavy showers",
+  85: "Light snow showers", 86: "Snow showers",
+  95: "Thunderstorm", 96: "Thunderstorm w/ hail", 99: "Severe thunderstorm w/ hail"
+};
+
+function $(id) { return document.getElementById(id); }
+function fmt(n, d=1) { return n == null || isNaN(n) ? "—" : Number(n).toFixed(d); }
+
+async function fetchModel(lat, lon, model) {
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+              `&current=temperature_2m,weather_code&hourly=temperature_2m,precipitation_probability` +
+              `&forecast_days=2&models=${model}&timezone=auto`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${model}: HTTP ${r.status}`);
+  return r.json();
+}
+
+async function loadAll(lat, lon) {
+  $("loc").textContent = `Location: ${lat.toFixed(3)}, ${lon.toFixed(3)} — querying ${MODELS.length} models…`;
+
+  const results = await Promise.allSettled(MODELS.map(m => fetchModel(lat, lon, m.key)));
+  const alive = [];
+  results.forEach((r, i) => {
+    if (r.status === "fulfilled" && r.value?.current?.temperature_2m != null) {
+      alive.push({ ...MODELS[i], data: r.value });
+    }
+  });
+
+  if (alive.length === 0) throw new Error("All models failed to respond");
+
+  const temps = alive.map(m => m.data.current.temperature_2m);
+  const mean = temps.reduce((a,b) => a+b, 0) / temps.length;
+  const min = Math.min(...temps), max = Math.max(...temps);
+  const spread = max - min;
+  const codes = alive.map(m => m.data.current.weather_code);
+  const commonCode = codes.sort((a,b) =>
+    codes.filter(v => v===a).length - codes.filter(v => v===b).length
+  ).pop();
+
+  let confLevel, confClass;
+  if (spread < 1.0) { confLevel = "High";   confClass = "conf-good"; }
+  else if (spread < 3.0) { confLevel = "Medium"; confClass = "conf-mid"; }
+  else { confLevel = "Low"; confClass = "conf-bad"; }
+
+  $("temp").textContent = fmt(mean, 1);
+  $("cond").textContent = WMO[commonCode] || "Unknown";
+  $("conf").textContent = confLevel;
+  $("conf").className = "conf-val " + confClass;
+  $("spread-txt").textContent = `±${fmt(spread/2, 1)}°C (${alive.length} models)`;
+
+  const barPct = Math.min(100, (spread / 5) * 100);
+  $("bar").style.width = `${barPct}%`;
+
+  $("models").innerHTML = alive
+    .sort((a,b) => a.data.current.temperature_2m - b.data.current.temperature_2m)
+    .map(m => `<div class="model-row"><span>${m.name}</span><b>${fmt(m.data.current.temperature_2m,1)}°C · ${WMO[m.data.current.weather_code]||"?"}</b></div>`)
+    .join("");
+
+  const hours = alive[0].data.hourly.time.slice(0, 24);
+  const nowIdx = hours.findIndex(t => new Date(t).getTime() >= Date.now());
+  const start = Math.max(0, nowIdx);
+  const hourlyMean = [];
+  for (let i = start; i < Math.min(start + 24, hours.length); i++) {
+    const tvals = alive.map(m => m.data.hourly.temperature_2m[i]).filter(v => v != null);
+    const pvals = alive.map(m => m.data.hourly.precipitation_probability?.[i]).filter(v => v != null);
+    hourlyMean.push({
+      t: new Date(hours[i]),
+      temp: tvals.reduce((a,b) => a+b, 0) / tvals.length,
+      precip: pvals.length ? Math.round(pvals.reduce((a,b) => a+b, 0) / pvals.length) : null,
+    });
+  }
+  $("hourly").innerHTML = hourlyMean.map(h => {
+    const hr = h.t.getHours();
+    const label = hr === 0 ? "12a" : hr < 12 ? `${hr}a` : hr === 12 ? "12p" : `${hr-12}p`;
+    return `<div class="hour">
+      <div class="hour-t">${label}</div>
+      <div class="hour-v">${fmt(h.temp,0)}°</div>
+      <div class="hour-r">${h.precip != null ? h.precip+"%" : ""}</div>
+    </div>`;
+  }).join("");
+
+  $("loc").textContent = `📍 ${lat.toFixed(3)}, ${lon.toFixed(3)} · ${alive.length}/${MODELS.length} models responded`;
+  $("content").style.display = "block";
+}
+
+function getLocation() {
+  $("perm-box").style.display = "none";
+  $("err-box").textContent = "";
+  $("loc").textContent = "Getting your location…";
+
+  if (!navigator.geolocation) {
+    $("err-box").textContent = "Geolocation not supported in this browser.";
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(
+    pos => loadAll(pos.coords.latitude, pos.coords.longitude)
+      .catch(e => { $("err-box").textContent = "Weather fetch failed: " + e.message; }),
+    err => {
+      $("loc").textContent = "";
+      $("perm-box").style.display = "block";
+      $("err-box").textContent = "Location blocked: " + err.message;
+    },
+    { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 }
+  );
+}
+
+$("perm-btn").addEventListener("click", getLocation);
+getLocation();
+</script>
+</body>
+</html>
