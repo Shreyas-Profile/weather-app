@@ -30,6 +30,7 @@ Rules:
 - Weight sensor readings by INVERSE distance squared. A station 1km away counts 100x more than one 10km away.
 - Correct for ELEVATION: temp drops ~6.5°C per 1000m elevation gain. If a sensor is 500m higher than the user, its reading is ~3°C colder than the user experiences.
 - For rain/snow/cloud state, trust satellite/radar over forecast models. Sensors can be blocked by trees, so trust them for temperature more than for sky state.
+- **CRITICAL for the "condition" field:** decide raining vs not-raining from \`nowcast_minutely\` (radar-blended, minute-resolution). If \`nowcast_minutely.raining_right_now\` is FALSE, condition MUST NOT be "rain"/"snow"/"thunderstorm" — use "cloudy"/"overcast"/"partly_cloudy" based on cloud_cover_pct. The satellite \`current.weather_code\` and \`current.precipitation\` fields can be stale (model output that lags real radar) — trust nowcast over them.
 - If ALL sensors are >20km away, confidence drops.
 - If sensors disagree with satellite (e.g., station says clear but satellite says overcast), say so in reasoning and lean satellite for sky, sensor for temp.
 - Spread rule for confidence: if the trusted sensor cluster agrees within <1°C → high; 1-3°C → medium; >3°C → low.`;
@@ -141,12 +142,107 @@ async function fetchNetatmoStations(lat, lon, env) {
 async function fetchCurrentSatellite(lat, lon) {
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
               `&current=temperature_2m,apparent_temperature,cloud_cover,precipitation,rain,snowfall,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m,relative_humidity_2m,pressure_msl,uv_index,visibility` +
+              `&minutely_15=precipitation,rain,snowfall,weather_code` +
               `&hourly=temperature_2m,apparent_temperature,precipitation,precipitation_probability,weather_code,cloud_cover,wind_speed_10m,wind_direction_10m,uv_index` +
               `&daily=weather_code,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,sunrise,sunset,precipitation_sum,precipitation_probability_max,wind_speed_10m_max,wind_direction_10m_dominant,uv_index_max` +
-              `&forecast_days=7&timezone=auto`;
+              `&forecast_days=7&forecast_minutely_15=48&timezone=auto`;
   const r = await fetch(url);
   if (!r.ok) throw new Error(`Open-Meteo failed: ${r.status}`);
   return r.json();
+}
+
+async function handleGeocode(request) {
+  const url = new URL(request.url);
+  const q = (url.searchParams.get("q") || "").trim();
+  if (q.length < 2) return json({ results: [] });
+  try {
+    const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=8&language=en&format=json`);
+    if (!r.ok) return json({ results: [] });
+    const data = await r.json();
+    const results = (data.results || []).map(p => ({
+      name: p.name,
+      admin1: p.admin1,
+      country: p.country,
+      country_code: p.country_code,
+      lat: p.latitude,
+      lon: p.longitude,
+      elevation: p.elevation
+    }));
+    return json({ results }, 200, { "Cache-Control": "public, max-age=86400" });
+  } catch (e) {
+    return json({ results: [], error: e.message });
+  }
+}
+
+function intensityLabel(mmPerHour, weatherCode) {
+  if (weatherCode >= 71 && weatherCode <= 77) return "snow";
+  if (weatherCode === 85 || weatherCode === 86) return "snow showers";
+  if (weatherCode === 66 || weatherCode === 67) return "sleet";
+  if (weatherCode >= 95) return "thunderstorm";
+  if (mmPerHour <= 0.05) return null;
+  if (mmPerHour < 0.5) return "drizzle";
+  if (mmPerHour < 2.5) return "light rain";
+  if (mmPerHour < 7.6) return "rain";
+  if (mmPerHour < 50) return "heavy rain";
+  return "torrential rain";
+}
+
+/**
+ * Turn Open-Meteo minutely_15 (four bins per hour) into a minute-precision
+ * nowcast: per-minute mm/h array (120 min), compressed events, human summary.
+ * Each 15-min bucket's mm total is treated as constant across its minutes:
+ * mm/h == mm_in_15_min * 4 for every minute inside that bucket.
+ */
+function buildNowcast(minutely) {
+  if (!minutely || !minutely.time || !minutely.precipitation) return null;
+  const now = Date.now();
+  let startIdx = minutely.time.findIndex(t => new Date(t).getTime() > now) - 1;
+  if (startIdx < 0) startIdx = 0;
+
+  const perMinute = [];
+  for (let m = 0; m < 120; m++) {
+    const targetMs = now + m * 60000;
+    let slot = startIdx;
+    for (let i = startIdx; i < minutely.time.length; i++) {
+      if (new Date(minutely.time[i]).getTime() <= targetMs) slot = i;
+      else break;
+    }
+    const mm15 = minutely.precipitation[slot] || 0;
+    const mmH = mm15 * 4;
+    const wc = minutely.weather_code?.[slot];
+    perMinute.push({ minute: m, mm_per_h: +mmH.toFixed(2), weather_code: wc });
+  }
+
+  const events = [];
+  let inEv = false, evStart = 0, evPeak = 0, evPeakWC = null;
+  for (let i = 0; i < perMinute.length; i++) {
+    const p = perMinute[i];
+    const raining = p.mm_per_h > 0.05;
+    if (raining && !inEv) { inEv = true; evStart = i; evPeak = p.mm_per_h; evPeakWC = p.weather_code; }
+    else if (raining) { if (p.mm_per_h > evPeak) { evPeak = p.mm_per_h; evPeakWC = p.weather_code; } }
+    else if (inEv) {
+      inEv = false;
+      events.push({ start_min: evStart, end_min: i - 1, peak_mm_h: +evPeak.toFixed(2), type: intensityLabel(evPeak, evPeakWC) });
+    }
+  }
+  if (inEv) events.push({ start_min: evStart, end_min: 119, peak_mm_h: +evPeak.toFixed(2), type: intensityLabel(evPeak, evPeakWC), continues: true });
+
+  let summary;
+  if (events.length === 0) summary = "No precipitation expected in the next 2 hours";
+  else {
+    const parts = [];
+    events.slice(0, 3).forEach((ev, idx) => {
+      if (idx === 0) {
+        if (ev.start_min === 0) parts.push(`${ev.type} now${ev.end_min < 119 ? `, stopping in ${ev.end_min + 1} min` : ""}`);
+        else parts.push(`${ev.type} starting in ${ev.start_min} min${ev.end_min < 119 ? `, ending in ${ev.end_min + 1} min` : ""}`);
+      } else {
+        parts.push(`then ${ev.type} from ${ev.start_min} min`);
+      }
+    });
+    summary = parts.join(", ");
+  }
+
+  return { summary, events, per_minute: perMinute, raining_right_now: perMinute[0].mm_per_h > 0.05 };
 }
 
 async function fetchModelEnsemble(lat, lon) {
@@ -242,6 +338,9 @@ async function handleWeather(request, env) {
     elevation_m: satellite.elevation
   } : null;
 
+  // Build minute-precision rain nowcast from Open-Meteo minutely_15
+  const nowcast = buildNowcast(satellite.minutely_15);
+
   // Extract next-rain info from hourly probability
   const hourly = satellite.hourly || {};
   const nowIdx = (hourly.time || []).findIndex(t => new Date(t).getTime() >= Date.now());
@@ -295,6 +394,11 @@ async function handleWeather(request, env) {
     neighborhood_stations_nearby: netatmo || [],  // Netatmo garden weather stations (best density, but PWS quality varies)
     airport_sensors_nearby: sensorReadings,        // METAR — quality-controlled, but sparse
     satellite_radar_current: sat,
+    nowcast_minutely: nowcast ? {
+      raining_right_now: nowcast.raining_right_now,
+      summary: nowcast.summary,
+      events: nowcast.events
+    } : null,
     forecast_models_current: models || [],
     wmo_code_meanings: "0=clear, 1-3=partly to overcast, 45-48=fog, 51-55=drizzle, 61-65=rain, 71-75=snow, 80-82=showers, 95-99=thunderstorm"
   };
@@ -311,7 +415,8 @@ async function handleWeather(request, env) {
     forecast: {
       hourly: hourlyForecast,
       daily: daily,
-      next_rain_hours: nextRainHours
+      next_rain_hours: nextRainHours,
+      nowcast: nowcast
     },
     sources: {
       netatmo: netatmo || [],
@@ -337,6 +442,7 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/api/weather") return handleWeather(request, env);
+    if (url.pathname === "/api/geocode") return handleGeocode(request);
     return env.ASSETS.fetch(request);
   }
 };
