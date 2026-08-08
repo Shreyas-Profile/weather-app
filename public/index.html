@@ -90,7 +90,12 @@
     </div>
 
     <div class="card">
-      <div class="section-title">📡 Real sensors near you</div>
+      <div class="section-title">🏡 Neighborhood stations (Netatmo)</div>
+      <div id="netatmo"></div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">✈️ Airport sensors (METAR)</div>
       <div id="sensors"></div>
     </div>
 
@@ -154,8 +159,20 @@ async function loadWeather(lat, lon) {
   $("reasoning").textContent = v.reasoning || "";
   $("advice").textContent = v.advice ? "💡 " + v.advice : "";
 
+  $("netatmo").innerHTML = (s.netatmo && s.netatmo.length)
+    ? s.netatmo.map(x => `
+        <div class="sensor">
+          <div>
+            <div class="sensor-name">${x.name}</div>
+            <div class="sensor-meta">${x.humidity_pct != null ? x.humidity_pct + "% humidity · " : ""}elev ${x.elevation_m ?? "?"}m · updated ${new Date(x.observed_at).toLocaleTimeString()}</div>
+          </div>
+          <div class="sensor-val">${fmt(x.temp_c, 1)}°C</div>
+          <div class="sensor-dist">${fmt(x.distance_km, 2)}km</div>
+        </div>`).join("")
+    : `<div class="sub">No neighborhood stations found within ~5km. (Netatmo coverage is dense in cities, sparse rurally.)</div>`;
+
   $("sensors").innerHTML = s.sensors.length === 0
-    ? `<div class="sub">No real sensors within ~440km. Relying on satellite + models only.</div>`
+    ? `<div class="sub">No airport sensors within ~440km. Relying on satellite + models only.</div>`
     : s.sensors.map(x => `
         <div class="sensor">
           <div>
