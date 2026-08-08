@@ -4,57 +4,104 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Sensor Weather — real stations near you</title>
-<meta name="description" content="Hyperlocal weather from real nearby airport sensors + satellite, judged by AI." />
+<meta name="description" content="Hyperlocal weather from real nearby sensors + satellite, judged by AI. Hourly, daily forecasts, sunrise/sunset, wind, UV." />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🛰️</text></svg>" />
 <style>
   :root {
     --bg: #0b1020; --panel: #141a2e; --panel-2: #1c243c;
     --text: #e8ecf7; --dim: #8a94b0; --accent: #7cc4ff;
     --warn: #ffb454; --good: #7cffb4; --bad: #ff7c9c; --border: #26304d;
+    --rain: #7cc4ff;
   }
   @media (prefers-color-scheme: light) {
     :root {
       --bg: #f4f6fb; --panel: #ffffff; --panel-2: #eef1f8;
       --text: #0e1428; --dim: #5b6480; --accent: #0b6bcb;
       --warn: #a05a00; --good: #0a7a3f; --bad: #b32448; --border: #d9dfec;
+      --rain: #0b6bcb;
     }
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
-  .wrap { max-width: 780px; margin: 0 auto; padding: 24px 20px 80px; }
-  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; flex-wrap: wrap; gap: 8px; }
-  h1 { font-size: 22px; margin: 0; font-weight: 600; letter-spacing: -0.01em; }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 20px 16px 80px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; flex-wrap: wrap; gap: 8px; }
+  h1 { font-size: 20px; margin: 0; font-weight: 600; letter-spacing: -0.01em; }
   .sub { color: var(--dim); font-size: 13px; }
-  .loc { color: var(--dim); font-size: 13px; margin-bottom: 20px; }
-  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 22px; margin-bottom: 14px; }
+  .loc { color: var(--dim); font-size: 13px; margin-bottom: 16px; }
+
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 20px; margin-bottom: 12px; }
+  .card.tight { padding: 16px; }
+
   .hero { display: grid; grid-template-columns: auto 1fr; gap: 20px; align-items: center; }
-  .icon-big { font-size: 72px; line-height: 1; }
-  .temp { font-size: 56px; font-weight: 300; letter-spacing: -0.03em; line-height: 1; }
+  .icon-big { font-size: 68px; line-height: 1; }
+  .temp { font-size: 54px; font-weight: 300; letter-spacing: -0.03em; line-height: 1; }
   .temp .unit { font-size: 22px; color: var(--dim); margin-left: 4px; }
-  .cond { color: var(--text); font-size: 17px; margin-top: 6px; text-transform: capitalize; }
+  .cond { color: var(--text); font-size: 16px; margin-top: 6px; text-transform: capitalize; }
+  .feels { color: var(--dim); font-size: 13px; margin-top: 4px; }
+
   .confbar { display: flex; align-items: center; gap: 10px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
-  .confdot { width: 10px; height: 10px; border-radius: 50%; }
+  .confdot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
   .conf-high .confdot { background: var(--good); }
   .conf-medium .confdot { background: var(--warn); }
   .conf-low .confdot { background: var(--bad); }
   .conflabel { font-size: 13px; color: var(--dim); }
   .conflabel b { color: var(--text); text-transform: capitalize; }
+
+  .rain-alert { background: linear-gradient(135deg, rgba(124,196,255,0.15), rgba(124,196,255,0.05)); border: 1px solid rgba(124,196,255,0.35); border-radius: 10px; padding: 10px 14px; margin-top: 12px; font-size: 14px; display: flex; align-items: center; gap: 10px; }
+  .rain-alert .ra-ico { font-size: 22px; }
+
   .section-title { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 12px; font-weight: 600; }
   .reason { font-size: 14px; line-height: 1.6; color: var(--text); }
   .advice { font-size: 14px; color: var(--accent); margin-top: 10px; }
-  .sensor { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 13px; align-items: center; }
+
+  /* Stat grid: wind, humidity, pressure, uv, visibility */
+  .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(105px, 1fr)); gap: 8px; }
+  .stat { background: var(--panel-2); border-radius: 10px; padding: 10px 12px; }
+  .stat-label { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.05em; }
+  .stat-val { font-size: 15px; font-weight: 500; margin-top: 4px; display: flex; align-items: baseline; gap: 4px; }
+  .stat-unit { font-size: 11px; color: var(--dim); font-weight: 400; }
+  .stat-extra { font-size: 11px; color: var(--dim); margin-top: 2px; }
+
+  /* Hourly strip */
+  .hscroll { overflow-x: auto; padding-bottom: 6px; margin: 0 -20px; padding-left: 20px; padding-right: 20px; -webkit-overflow-scrolling: touch; }
+  .hscroll::-webkit-scrollbar { height: 6px; }
+  .hscroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  .htrack { display: flex; gap: 8px; min-width: min-content; }
+  .hour { flex: 0 0 auto; text-align: center; padding: 12px 8px; border-radius: 10px; background: var(--panel-2); min-width: 62px; }
+  .hour-t { font-size: 10px; color: var(--dim); }
+  .hour-i { font-size: 22px; margin: 4px 0; line-height: 1; }
+  .hour-v { font-size: 14px; font-weight: 500; }
+  .hour-r { font-size: 10px; color: var(--rain); margin-top: 2px; min-height: 12px; }
+
+  /* Daily list */
+  .day { display: grid; grid-template-columns: 62px 32px 1fr auto; gap: 10px; padding: 10px 0; align-items: center; border-bottom: 1px solid var(--border); }
+  .day:last-child { border-bottom: 0; }
+  .day-name { font-size: 13px; font-weight: 500; }
+  .day-sub { font-size: 10px; color: var(--rain); }
+  .day-ico { font-size: 22px; text-align: center; line-height: 1; }
+  .day-bar { position: relative; height: 6px; background: var(--panel-2); border-radius: 3px; }
+  .day-bar-fill { position: absolute; height: 100%; background: linear-gradient(90deg, #7cc4ff, #ffb454, #ff7c9c); border-radius: 3px; }
+  .day-temps { font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .day-temps .lo { color: var(--dim); margin-right: 8px; }
+
+  /* Sensors list */
+  .sensor { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 13px; align-items: center; }
   .sensor:last-child { border-bottom: 0; }
   .sensor-name { color: var(--text); font-weight: 500; }
   .sensor-meta { color: var(--dim); font-size: 11px; margin-top: 2px; }
   .sensor-val { color: var(--text); font-variant-numeric: tabular-nums; }
   .sensor-dist { color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
-  .stat-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 12px; }
-  .stat { background: var(--panel-2); border-radius: 10px; padding: 10px 12px; text-align: center; }
-  .stat-label { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.05em; }
-  .stat-val { font-size: 15px; font-weight: 500; margin-top: 4px; }
+
+  /* Sun path */
+  .sun-row { display: grid; grid-template-columns: auto 1fr auto; gap: 14px; align-items: center; }
+  .sun-time { font-size: 13px; color: var(--dim); }
+  .sun-time b { color: var(--text); display: block; font-weight: 500; font-size: 15px; }
+  .sun-path { position: relative; height: 40px; }
+  .sun-path svg { width: 100%; height: 100%; overflow: visible; }
+
   button { background: var(--accent); color: var(--bg); border: 0; padding: 12px 20px; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; }
   .err { color: var(--bad); font-size: 14px; margin-top: 8px; padding: 12px; background: var(--panel); border-radius: 10px; }
-  .footer { color: var(--dim); font-size: 12px; text-align: center; margin-top: 30px; }
+  .footer { color: var(--dim); font-size: 12px; text-align: center; margin-top: 30px; line-height: 1.6; }
   .footer a { color: var(--accent); text-decoration: none; }
   .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--dim); border-top-color: transparent; border-radius: 50%; animation: sp 0.9s linear infinite; vertical-align: middle; }
   @keyframes sp { to { transform: rotate(360deg); } }
@@ -69,52 +116,70 @@
   <div class="loc" id="loc"><span class="spinner"></span> Getting your location…</div>
 
   <div id="content" style="display:none">
+    <!-- HERO -->
     <div class="card">
       <div class="hero">
         <div class="icon-big" id="icon">☀️</div>
         <div>
           <div class="temp"><span id="temp">—</span><span class="unit">°C</span></div>
           <div class="cond" id="cond">—</div>
+          <div class="feels" id="feels"></div>
         </div>
       </div>
       <div class="confbar" id="confbar">
         <div class="confdot"></div>
         <div class="conflabel">Confidence: <b id="conf">—</b> · <span id="conf-note"></span></div>
       </div>
+      <div id="rain-alert" style="display:none"></div>
     </div>
 
+    <!-- CURRENT STATS -->
+    <div class="card tight">
+      <div class="section-title">Current conditions</div>
+      <div class="stats" id="stats"></div>
+    </div>
+
+    <!-- HOURLY -->
+    <div class="card">
+      <div class="section-title">Next 24 hours</div>
+      <div class="hscroll"><div class="htrack" id="hourly"></div></div>
+    </div>
+
+    <!-- DAILY -->
+    <div class="card">
+      <div class="section-title">7-day forecast</div>
+      <div id="daily"></div>
+    </div>
+
+    <!-- SUN -->
+    <div class="card tight">
+      <div class="section-title">Sun</div>
+      <div class="sun-row">
+        <div class="sun-time">🌅 <b id="sunrise">—</b>sunrise</div>
+        <div class="sun-path"><svg viewBox="0 0 200 40" preserveAspectRatio="none">
+          <path d="M 10 35 Q 100 -20 190 35" stroke="var(--warn)" stroke-width="1.5" fill="none" stroke-dasharray="3 3" />
+          <circle id="sun-dot" r="5" fill="var(--warn)" cx="10" cy="35"/>
+        </svg></div>
+        <div class="sun-time" style="text-align:right">🌇 <b id="sunset">—</b>sunset</div>
+      </div>
+      <div class="sub" id="daylen" style="text-align:center; margin-top:6px;"></div>
+    </div>
+
+    <!-- AI reasoning -->
     <div class="card">
       <div class="section-title">🤖 AI reasoning</div>
       <div class="reason" id="reasoning">—</div>
       <div class="advice" id="advice"></div>
     </div>
 
+    <!-- Sensors -->
     <div class="card">
       <div class="section-title">🏡 Neighborhood stations (Netatmo)</div>
       <div id="netatmo"></div>
     </div>
-
     <div class="card">
       <div class="section-title">✈️ Airport sensors (METAR)</div>
       <div id="sensors"></div>
-    </div>
-
-    <div class="card">
-      <div class="section-title">🛰️ Satellite / radar snapshot</div>
-      <div class="stat-row">
-        <div class="stat">
-          <div class="stat-label">Cloud</div>
-          <div class="stat-val" id="sat-cloud">—</div>
-        </div>
-        <div class="stat">
-          <div class="stat-label">Rain (now)</div>
-          <div class="stat-val" id="sat-rain">—</div>
-        </div>
-        <div class="stat">
-          <div class="stat-label">Snow (now)</div>
-          <div class="stat-val" id="sat-snow">—</div>
-        </div>
-      </div>
     </div>
   </div>
 
@@ -127,38 +192,179 @@
   </div>
 
   <div class="footer">
-    Built by <a href="https://shreyas.uk">Shreyas</a> · <a href="https://github.com/Shreyas-Profile/weather-app">source</a>
-    · sensors from aviationweather.gov · satellite via open-meteo · AI via openrouter
+    Built by <a href="https://shreyas.uk">Shreyas</a> · <a href="https://github.com/Shreyas-Profile/weather-app">source</a><br>
+    Netatmo garden stations · METAR airports · Open-Meteo satellite · AI via OpenRouter (Gemini)
   </div>
 </div>
 
 <script>
-const ICONS = {
+// AI-verdict-condition icons (matches the AI's condition enum)
+const CONDITION_ICONS = {
   sunny: "☀️", partly_cloudy: "⛅", cloudy: "🌥️", overcast: "☁️",
   rain: "🌧️", snow: "❄️", thunderstorm: "⛈️", fog: "🌫️"
 };
+// Open-Meteo/WMO weather code → icon (for hourly and daily strips)
+function wmoIcon(code, hour) {
+  const isNight = hour != null && (hour < 6 || hour >= 20);
+  if (code === 0) return isNight ? "🌙" : "☀️";
+  if (code === 1) return isNight ? "🌙" : "🌤️";
+  if (code === 2) return isNight ? "☁️" : "⛅";
+  if (code === 3) return "☁️";
+  if (code === 45 || code === 48) return "🌫️";
+  if (code >= 51 && code <= 55) return "🌦️";
+  if (code === 56 || code === 57) return "🌨️";
+  if (code >= 61 && code <= 65) return "🌧️";
+  if (code === 66 || code === 67) return "🌨️";
+  if (code >= 71 && code <= 77) return "❄️";
+  if (code >= 80 && code <= 82) return "🌦️";
+  if (code === 85 || code === 86) return "🌨️";
+  if (code === 95) return "⛈️";
+  if (code >= 96) return "⛈️";
+  return "🌡️";
+}
+function wmoLabel(code) {
+  const m = { 0: "Clear", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
+    45: "Fog", 48: "Rime fog", 51: "Light drizzle", 53: "Drizzle", 55: "Heavy drizzle",
+    56: "Freezing drizzle", 57: "Heavy freezing drizzle", 61: "Light rain", 63: "Rain", 65: "Heavy rain",
+    66: "Freezing rain", 67: "Heavy freezing rain", 71: "Light snow", 73: "Snow", 75: "Heavy snow",
+    77: "Snow grains", 80: "Light showers", 81: "Showers", 82: "Heavy showers",
+    85: "Snow showers", 86: "Heavy snow showers", 95: "Thunderstorm",
+    96: "Thunderstorm w/ hail", 99: "Severe thunderstorm" };
+  return m[code] || "Unknown";
+}
+function windArrow(deg) {
+  // wind direction is where wind is COMING from; arrow points where it's going TO
+  const dirs = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+  const compass = dirs[Math.round(((deg + 360) % 360) / 22.5) % 16];
+  return { compass, rotate: (deg + 180) % 360 };
+}
 function $(id) { return document.getElementById(id); }
-function fmt(n, d=1) { return n == null || isNaN(n) ? "—" : Number(n).toFixed(d); }
+function fmt(n, d=0) { return n == null || isNaN(n) ? "—" : Number(n).toFixed(d); }
+function hourLabel(t) {
+  const d = new Date(t);
+  const h = d.getHours();
+  return h === 0 ? "12a" : h < 12 ? `${h}a` : h === 12 ? "12p" : `${h-12}p`;
+}
+function shortDay(dateStr, idx) {
+  if (idx === 0) return "Today";
+  if (idx === 1) return "Tmrw";
+  return new Date(dateStr).toLocaleDateString(undefined, { weekday: "short" });
+}
+function fmtTime(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
 
 async function loadWeather(lat, lon) {
-  $("loc").innerHTML = `<span class="spinner"></span> Fetching sensors + satellite near ${lat.toFixed(3)}, ${lon.toFixed(3)}…`;
+  $("loc").innerHTML = `<span class="spinner"></span> Fetching sensors + satellite + forecasts…`;
   const r = await fetch(`/api/weather?lat=${lat}&lon=${lon}`);
   const data = await r.json();
   if (!r.ok || data.error) throw new Error(data.error || `API returned ${r.status}`);
 
   const v = data.verdict;
   const s = data.sources;
+  const f = data.forecast || {};
+  const sat = s.satellite || {};
 
-  $("icon").textContent = ICONS[v.condition] || "🌤️";
+  // Hero
+  $("icon").textContent = CONDITION_ICONS[v.condition] || "🌤️";
   $("temp").textContent = fmt(v.temp_c, 1);
   $("cond").textContent = (v.condition || "").replace(/_/g, " ");
+  if (sat.feels_like_c != null) {
+    $("feels").textContent = `Feels like ${fmt(sat.feels_like_c, 0)}°C`;
+  }
   $("conf").textContent = v.confidence || "—";
   $("confbar").className = "confbar conf-" + (v.confidence || "medium");
-  $("conf-note").textContent = `${s.sensors.length} sensor${s.sensors.length===1?"":"s"} + satellite`;
+  $("conf-note").textContent = `${s.netatmo?.length || 0} neighborhood + ${s.sensors?.length || 0} airport + satellite`;
 
+  // Rain alert
+  if (f.next_rain_hours != null && f.next_rain_hours < 12) {
+    const label = f.next_rain_hours === 0 ? "now" : `in about ${f.next_rain_hours}h`;
+    $("rain-alert").style.display = "block";
+    $("rain-alert").className = "rain-alert";
+    $("rain-alert").innerHTML = `<span class="ra-ico">🌧️</span><span>Rain likely <b>${label}</b></span>`;
+  }
+
+  // Current stats
+  const windDir = sat.wind_direction_deg != null ? windArrow(sat.wind_direction_deg) : null;
+  const stats = [
+    sat.wind_speed_kmh != null && { icon: "💨", label: "Wind", val: fmt(sat.wind_speed_kmh, 0), unit: "km/h", extra: windDir ? `${windDir.compass}${sat.wind_gusts_kmh ? ` · gusts ${fmt(sat.wind_gusts_kmh,0)}` : ""}` : "" },
+    sat.humidity_pct != null && { icon: "💧", label: "Humidity", val: fmt(sat.humidity_pct, 0), unit: "%", extra: "" },
+    sat.pressure_hpa != null && { icon: "📊", label: "Pressure", val: fmt(sat.pressure_hpa, 0), unit: "hPa", extra: "" },
+    sat.uv_index != null && { icon: "🔆", label: "UV Index", val: fmt(sat.uv_index, 1), unit: "", extra: uvLabel(sat.uv_index) },
+    sat.visibility_m != null && { icon: "👁️", label: "Visibility", val: fmt(sat.visibility_m / 1000, 0), unit: "km", extra: "" },
+    sat.cloud_cover_pct != null && { icon: "☁️", label: "Cloud cover", val: fmt(sat.cloud_cover_pct, 0), unit: "%", extra: "" },
+    sat.precipitation_mm != null && { icon: "🌧️", label: "Precip now", val: fmt(sat.precipitation_mm, 2), unit: "mm", extra: sat.snowfall_cm > 0 ? `${fmt(sat.snowfall_cm,1)}cm snow` : "" }
+  ].filter(Boolean);
+  $("stats").innerHTML = stats.map(x => `
+    <div class="stat">
+      <div class="stat-label">${x.icon} ${x.label}</div>
+      <div class="stat-val">${x.val}<span class="stat-unit">${x.unit}</span></div>
+      ${x.extra ? `<div class="stat-extra">${x.extra}</div>` : ""}
+    </div>`).join("");
+
+  // Hourly
+  $("hourly").innerHTML = (f.hourly || []).map((h, i) => {
+    const hr = new Date(h.time).getHours();
+    return `<div class="hour">
+      <div class="hour-t">${i === 0 ? "Now" : hourLabel(h.time)}</div>
+      <div class="hour-i">${wmoIcon(h.weather_code, hr)}</div>
+      <div class="hour-v">${fmt(h.temp_c, 0)}°</div>
+      <div class="hour-r">${h.precip_prob_pct >= 20 ? "💧" + h.precip_prob_pct + "%" : ""}</div>
+    </div>`;
+  }).join("");
+
+  // Daily (with min-max temperature bar)
+  const allTemps = (f.daily || []).flatMap(d => [d.temp_min_c, d.temp_max_c]).filter(x => x != null);
+  const gMin = Math.min(...allTemps), gMax = Math.max(...allTemps);
+  const range = Math.max(1, gMax - gMin);
+  $("daily").innerHTML = (f.daily || []).map((d, i) => {
+    const barLeft = ((d.temp_min_c - gMin) / range) * 100;
+    const barWidth = ((d.temp_max_c - d.temp_min_c) / range) * 100;
+    const rainInfo = d.precip_prob_max_pct >= 20 ? `<div class="day-sub">💧 ${d.precip_prob_max_pct}% · ${fmt(d.precip_sum_mm, 1)}mm</div>` : "";
+    return `<div class="day">
+      <div>
+        <div class="day-name">${shortDay(d.date, i)}</div>
+        ${rainInfo}
+      </div>
+      <div class="day-ico" title="${wmoLabel(d.weather_code)}">${wmoIcon(d.weather_code)}</div>
+      <div class="day-bar"><div class="day-bar-fill" style="left:${barLeft}%; width:${barWidth}%"></div></div>
+      <div class="day-temps"><span class="lo">${fmt(d.temp_min_c, 0)}°</span><span>${fmt(d.temp_max_c, 0)}°</span></div>
+    </div>`;
+  }).join("");
+
+  // Sun
+  if (f.daily && f.daily[0]) {
+    const day = f.daily[0];
+    $("sunrise").textContent = fmtTime(day.sunrise) + " ";
+    $("sunset").textContent = fmtTime(day.sunset) + " ";
+    const sr = new Date(day.sunrise).getTime();
+    const ss = new Date(day.sunset).getTime();
+    const now = Date.now();
+    if (now >= sr && now <= ss) {
+      const frac = (now - sr) / (ss - sr);
+      const t = frac;
+      // point on quadratic bezier M 10 35 Q 100 -20 190 35
+      const x = (1-t)*(1-t)*10 + 2*(1-t)*t*100 + t*t*190;
+      const y = (1-t)*(1-t)*35 + 2*(1-t)*t*(-20) + t*t*35;
+      $("sun-dot").setAttribute("cx", x);
+      $("sun-dot").setAttribute("cy", y);
+    } else {
+      // hide sun dot outside daylight
+      $("sun-dot").setAttribute("cx", now < sr ? 10 : 190);
+    }
+    const durMs = ss - sr;
+    const hrs = Math.floor(durMs / 3600000);
+    const mins = Math.floor((durMs % 3600000) / 60000);
+    $("daylen").textContent = `${hrs}h ${mins}m of daylight today`;
+  }
+
+  // AI reasoning
   $("reasoning").textContent = v.reasoning || "";
   $("advice").textContent = v.advice ? "💡 " + v.advice : "";
 
+  // Netatmo
   $("netatmo").innerHTML = (s.netatmo && s.netatmo.length)
     ? s.netatmo.map(x => `
         <div class="sensor">
@@ -169,10 +375,11 @@ async function loadWeather(lat, lon) {
           <div class="sensor-val">${fmt(x.temp_c, 1)}°C</div>
           <div class="sensor-dist">${fmt(x.distance_km, 2)}km</div>
         </div>`).join("")
-    : `<div class="sub">No neighborhood stations found within ~5km. (Netatmo coverage is dense in cities, sparse rurally.)</div>`;
+    : `<div class="sub">No neighborhood stations found within ~11km. (Netatmo is dense in cities, sparse rurally.)</div>`;
 
+  // METAR
   $("sensors").innerHTML = s.sensors.length === 0
-    ? `<div class="sub">No airport sensors within ~440km. Relying on satellite + models only.</div>`
+    ? `<div class="sub">No airport sensors within ~440km.</div>`
     : s.sensors.map(x => `
         <div class="sensor">
           <div>
@@ -183,15 +390,17 @@ async function loadWeather(lat, lon) {
           <div class="sensor-dist">${fmt(x.distance_km, 1)}km</div>
         </div>`).join("");
 
-  if (s.satellite) {
-    $("sat-cloud").textContent = `${s.satellite.cloud_cover_pct ?? "—"}%`;
-    $("sat-rain").textContent = `${fmt(s.satellite.rain_mm, 2)} mm`;
-    $("sat-snow").textContent = `${fmt(s.satellite.snowfall_cm, 2)} cm`;
-  }
-
   $("loc").textContent = `📍 ${lat.toFixed(3)}, ${lon.toFixed(3)} · updated ${new Date().toLocaleTimeString()}`;
   $("content").style.display = "block";
   $("err-box").innerHTML = "";
+}
+
+function uvLabel(uv) {
+  if (uv < 3) return "Low";
+  if (uv < 6) return "Moderate";
+  if (uv < 8) return "High";
+  if (uv < 11) return "Very high";
+  return "Extreme";
 }
 
 function getLocation() {

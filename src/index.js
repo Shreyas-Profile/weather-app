@@ -140,9 +140,10 @@ async function fetchNetatmoStations(lat, lon, env) {
 
 async function fetchCurrentSatellite(lat, lon) {
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
-              `&current=temperature_2m,cloud_cover,precipitation,rain,snowfall,weather_code,wind_speed_10m` +
-              `&hourly=temperature_2m,precipitation_probability,cloud_cover` +
-              `&forecast_days=1&timezone=auto`;
+              `&current=temperature_2m,apparent_temperature,cloud_cover,precipitation,rain,snowfall,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m,relative_humidity_2m,pressure_msl,uv_index,visibility` +
+              `&hourly=temperature_2m,apparent_temperature,precipitation,precipitation_probability,weather_code,cloud_cover,wind_speed_10m,wind_direction_10m,uv_index` +
+              `&daily=weather_code,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,sunrise,sunset,precipitation_sum,precipitation_probability_max,wind_speed_10m_max,wind_direction_10m_dominant,uv_index_max` +
+              `&forecast_days=7&timezone=auto`;
   const r = await fetch(url);
   if (!r.ok) throw new Error(`Open-Meteo failed: ${r.status}`);
   return r.json();
@@ -224,15 +225,68 @@ async function handleWeather(request, env) {
 
   const sat = satellite.current ? {
     temperature_c: satellite.current.temperature_2m,
+    feels_like_c: satellite.current.apparent_temperature,
     cloud_cover_pct: satellite.current.cloud_cover,
     precipitation_mm: satellite.current.precipitation,
     rain_mm: satellite.current.rain,
     snowfall_cm: satellite.current.snowfall,
     weather_code: satellite.current.weather_code,
     wind_speed_kmh: satellite.current.wind_speed_10m,
+    wind_direction_deg: satellite.current.wind_direction_10m,
+    wind_gusts_kmh: satellite.current.wind_gusts_10m,
+    humidity_pct: satellite.current.relative_humidity_2m,
+    pressure_hpa: satellite.current.pressure_msl,
+    uv_index: satellite.current.uv_index,
+    visibility_m: satellite.current.visibility,
     time: satellite.current.time,
     elevation_m: satellite.elevation
   } : null;
+
+  // Extract next-rain info from hourly probability
+  const hourly = satellite.hourly || {};
+  const nowIdx = (hourly.time || []).findIndex(t => new Date(t).getTime() >= Date.now());
+  const startIdx = Math.max(0, nowIdx);
+  let nextRainHours = null;
+  if (hourly.precipitation_probability) {
+    for (let i = startIdx; i < Math.min(startIdx + 24, hourly.precipitation_probability.length); i++) {
+      if (hourly.precipitation_probability[i] >= 50) {
+        nextRainHours = i - startIdx;
+        break;
+      }
+    }
+  }
+
+  const hourlyForecast = [];
+  for (let i = startIdx; i < Math.min(startIdx + 24, (hourly.time || []).length); i++) {
+    hourlyForecast.push({
+      time: hourly.time[i],
+      temp_c: hourly.temperature_2m?.[i],
+      feels_like_c: hourly.apparent_temperature?.[i],
+      weather_code: hourly.weather_code?.[i],
+      precip_mm: hourly.precipitation?.[i],
+      precip_prob_pct: hourly.precipitation_probability?.[i],
+      cloud_cover_pct: hourly.cloud_cover?.[i],
+      wind_speed_kmh: hourly.wind_speed_10m?.[i],
+      uv_index: hourly.uv_index?.[i]
+    });
+  }
+
+  const dailyRaw = satellite.daily || {};
+  const daily = (dailyRaw.time || []).map((t, i) => ({
+    date: t,
+    weather_code: dailyRaw.weather_code?.[i],
+    temp_max_c: dailyRaw.temperature_2m_max?.[i],
+    temp_min_c: dailyRaw.temperature_2m_min?.[i],
+    feels_max_c: dailyRaw.apparent_temperature_max?.[i],
+    feels_min_c: dailyRaw.apparent_temperature_min?.[i],
+    sunrise: dailyRaw.sunrise?.[i],
+    sunset: dailyRaw.sunset?.[i],
+    precip_sum_mm: dailyRaw.precipitation_sum?.[i],
+    precip_prob_max_pct: dailyRaw.precipitation_probability_max?.[i],
+    wind_max_kmh: dailyRaw.wind_speed_10m_max?.[i],
+    wind_dominant_deg: dailyRaw.wind_direction_10m_dominant?.[i],
+    uv_max: dailyRaw.uv_index_max?.[i]
+  }));
 
   const payload = {
     user_location: { lat, lon, elevation_m: sat?.elevation_m ?? null },
@@ -252,6 +306,11 @@ async function handleWeather(request, env) {
 
   return json({
     verdict,
+    forecast: {
+      hourly: hourlyForecast,
+      daily: daily,
+      next_rain_hours: nextRainHours
+    },
     sources: {
       netatmo: netatmo || [],
       sensors: sensorReadings,
