@@ -12,7 +12,12 @@
     "enabled": true
   },
   "workers_dev": true,
-  "preview_urls": true
-  // TODO: attach weather.shreyas.uk custom domain once the shreyas.uk zone
-  // is on this account (currently on Pawan's 551pawan661@gmail.com account).
+  "preview_urls": true,
+  "routes": [
+    {
+      "pattern": "weather.shreyas.uk",
+      "zone_name": "shreyas.uk",
+      "custom_domain": true
+    }
+  ]
 }
