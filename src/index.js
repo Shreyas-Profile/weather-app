@@ -256,8 +256,9 @@ async function handleWeather(request, env) {
     }
   }
 
+  // Return the FULL 7-day hourly (168h) so the UI can filter per day when a day is clicked
   const hourlyForecast = [];
-  for (let i = startIdx; i < Math.min(startIdx + 24, (hourly.time || []).length); i++) {
+  for (let i = 0; i < (hourly.time || []).length; i++) {
     hourlyForecast.push({
       time: hourly.time[i],
       temp_c: hourly.temperature_2m?.[i],
@@ -267,6 +268,7 @@ async function handleWeather(request, env) {
       precip_prob_pct: hourly.precipitation_probability?.[i],
       cloud_cover_pct: hourly.cloud_cover?.[i],
       wind_speed_kmh: hourly.wind_speed_10m?.[i],
+      wind_direction_deg: hourly.wind_direction_10m?.[i],
       uv_index: hourly.uv_index?.[i]
     });
   }
