@@ -4,8 +4,10 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Sensor Weather — real stations near you</title>
-<meta name="description" content="Hyperlocal weather with minute-level rain nowcast. Real sensors + satellite + AI." />
+<meta name="description" content="Hyperlocal weather with minute-level rain nowcast, radar map, air quality. Real sensors + satellite + AI." />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🛰️</text></svg>" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
 <style>
   :root {
     --bg: #0a0f1f; --bg-2: #0f1428;
@@ -336,6 +338,19 @@
       <div class="sub" id="daylen" style="text-align:center; margin-top:8px;"></div>
     </div>
 
+    <!-- RADAR MAP -->
+    <div class="card">
+      <div class="section-title">🗺️ Radar map</div>
+      <div id="radar-map" style="height:280px; border-radius:12px; overflow:hidden; background:var(--panel-2);"></div>
+      <div class="sub" id="radar-time" style="text-align:center; margin-top:8px;"></div>
+    </div>
+
+    <!-- AIR QUALITY -->
+    <div class="card tight" id="aq-card" style="display:none">
+      <div class="section-title">🍃 Air quality</div>
+      <div id="aq-body"></div>
+    </div>
+
     <div class="card">
       <div class="section-title">🤖 AI reasoning</div>
       <div class="reason" id="reasoning">—</div>
@@ -510,6 +525,74 @@ function shortDay(dateStr, idx) { if (idx === 0) return "Today"; if (idx === 1) 
 function fmtTime(iso) { if (!iso) return "—"; return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }); }
 function uvLabel(uv) { if (uv < 3) return "Low"; if (uv < 6) return "Moderate"; if (uv < 8) return "High"; if (uv < 11) return "Very high"; return "Extreme"; }
 
+/* ============ RADAR MAP ============ */
+let radarMap = null, radarLayer = null, radarTimer = null, radarFrames = [], radarIdx = 0;
+function renderRadar(radarData, lat, lon) {
+  if (!window.L) { setTimeout(() => renderRadar(radarData, lat, lon), 300); return; }
+  if (!radarData || !radarData.host || !radarData.radar_past?.length) return;
+  const el = $("radar-map");
+  if (!radarMap) {
+    radarMap = L.map(el, { attributionControl: false, zoomControl: true });
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", { subdomains: "abcd", maxZoom: 12 }).addTo(radarMap);
+  }
+  radarMap.setView([lat, lon], 8);
+  L.circleMarker([lat, lon], { radius: 6, color: "#7cc4ff", fillColor: "#7cc4ff", fillOpacity: 0.8, weight: 2 }).addTo(radarMap);
+
+  radarFrames = [...radarData.radar_past, ...(radarData.radar_nowcast || [])];
+  if (radarLayer) radarMap.removeLayer(radarLayer);
+  radarIdx = radarData.radar_past.length - 1;
+  const showFrame = (i) => {
+    const f = radarFrames[i]; if (!f) return;
+    if (radarLayer) radarMap.removeLayer(radarLayer);
+    radarLayer = L.tileLayer(`${radarData.host}${f.path}/512/{z}/{x}/{y}/2/1_1.png`, { opacity: 0.7, tileSize: 256, maxZoom: 12 }).addTo(radarMap);
+    const t = new Date(f.time * 1000);
+    $("radar-time").textContent = (i >= radarData.radar_past.length ? "🔮 Nowcast · " : "") + t.toLocaleTimeString();
+  };
+  showFrame(radarIdx);
+  clearInterval(radarTimer);
+  radarTimer = setInterval(() => { radarIdx = (radarIdx + 1) % radarFrames.length; showFrame(radarIdx); }, 700);
+}
+
+/* ============ AIR QUALITY ============ */
+function aqiCategory(us) {
+  if (us == null) return null;
+  if (us <= 50) return { label: "Good", color: "#7cffb4" };
+  if (us <= 100) return { label: "Moderate", color: "#ffe066" };
+  if (us <= 150) return { label: "Unhealthy for sensitive groups", color: "#ff9057" };
+  if (us <= 200) return { label: "Unhealthy", color: "#ff7c9c" };
+  if (us <= 300) return { label: "Very unhealthy", color: "#a78bfa" };
+  return { label: "Hazardous", color: "#c62828" };
+}
+function renderAQ(aq) {
+  if (!aq || aq.us_aqi == null) { $("aq-card").style.display = "none"; return; }
+  const cat = aqiCategory(aq.us_aqi);
+  const pollutants = [
+    { k: "PM2.5", v: aq.pm2_5, u: "μg/m³" },
+    { k: "PM10", v: aq.pm10, u: "μg/m³" },
+    { k: "Ozone", v: aq.ozone, u: "μg/m³" },
+    { k: "NO₂", v: aq.no2, u: "μg/m³" },
+    { k: "CO", v: aq.co, u: "μg/m³" },
+    { k: "SO₂", v: aq.so2, u: "μg/m³" }
+  ].filter(x => x.v != null);
+  $("aq-card").style.display = "block";
+  $("aq-body").innerHTML = `
+    <div style="display:flex; align-items:center; gap:14px; margin-bottom:12px;">
+      <div style="width:56px;height:56px;border-radius:14px;background:${cat.color}22;color:${cat.color};display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:600;">${aq.us_aqi}</div>
+      <div>
+        <div style="font-size:15px;font-weight:500;">${cat.label}</div>
+        <div class="sub">US AQI</div>
+      </div>
+    </div>
+    <div class="stats">
+      ${pollutants.map(p => `
+        <div class="stat">
+          <div class="stat-label">${p.k}</div>
+          <div class="stat-val">${fmt(p.v, 1)}<span class="stat-unit">${p.u}</span></div>
+        </div>`).join("")}
+    </div>
+  `;
+}
+
 /* ============ NOWCAST BAR ============ */
 function renderNowcast(nc) {
   const wrap = $("nowcast-wrap");
@@ -596,6 +679,9 @@ function render(data, place) {
 
   // Nowcast bar (above hero)
   renderNowcast(f.nowcast);
+  // Radar map + air quality (new)
+  renderRadar(data.radar, place.lat, place.lon);
+  renderAQ(data.air_quality);
 
   $("icon").textContent = CONDITION_ICONS[v.condition] || "🌤️";
   $("temp").textContent = fmt(v.temp_c, 1);

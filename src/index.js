@@ -248,6 +248,42 @@ function buildNowcast(minutely) {
   return { summary, events, per_minute: perMinute, raining_right_now: perMinute[0].mm_per_h > 0.05 };
 }
 
+async function fetchAirQuality(lat, lon) {
+  // Note: pollen fields aren't valid in `current` — they only exist in `hourly`. Keeping current lean.
+  const url = `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}` +
+              `&current=us_aqi,european_aqi,pm10,pm2_5,carbon_monoxide,nitrogen_dioxide,ozone,sulphur_dioxide,dust,uv_index`;
+  const r = await fetch(url);
+  if (!r.ok) return null;
+  const data = await r.json();
+  if (!data.current) return null;
+  const c = data.current;
+  return {
+    us_aqi: c.us_aqi,
+    european_aqi: c.european_aqi,
+    pm2_5: c.pm2_5,
+    pm10: c.pm10,
+    co: c.carbon_monoxide,
+    no2: c.nitrogen_dioxide,
+    ozone: c.ozone,
+    so2: c.sulphur_dioxide,
+    dust: c.dust,
+    updated: c.time
+  };
+}
+
+async function fetchRadarFrames() {
+  // RainViewer publishes a small JSON manifest with the last N radar frames + a base host.
+  // Frontend uses this to render an animated tile overlay on Leaflet.
+  const r = await fetch("https://api.rainviewer.com/public/weather-maps.json");
+  if (!r.ok) return null;
+  const data = await r.json();
+  return {
+    host: data.host,
+    radar_past: (data.radar?.past || []).slice(-6),
+    radar_nowcast: data.radar?.nowcast || []
+  };
+}
+
 async function fetchModelEnsemble(lat, lon) {
   const models = ["gfs_seamless", "ecmwf_ifs025", "icon_seamless"];
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
@@ -302,11 +338,13 @@ async function handleWeather(request, env) {
     return json({ error: "server misconfigured: no AI key" }, 500);
   }
 
-  const [metars, satellite, models, netatmo] = await Promise.all([
+  const [metars, satellite, models, netatmo, airQuality, radar] = await Promise.all([
     fetchNearbyMetars(lat, lon).catch(e => ({ error: e.message })),
     fetchCurrentSatellite(lat, lon).catch(e => ({ error: e.message })),
     fetchModelEnsemble(lat, lon).catch(e => null),
-    fetchNetatmoStations(lat, lon, env).catch(e => [])
+    fetchNetatmoStations(lat, lon, env).catch(e => []),
+    fetchAirQuality(lat, lon).catch(e => null),
+    fetchRadarFrames().catch(e => null)
   ]);
 
   const sensorReadings = Array.isArray(metars) ? metars.map(m => ({
@@ -421,6 +459,8 @@ async function handleWeather(request, env) {
       next_rain_hours: nextRainHours,
       nowcast: nowcast
     },
+    air_quality: airQuality,
+    radar: radar,
     sources: {
       netatmo: netatmo || [],
       sensors: sensorReadings,
