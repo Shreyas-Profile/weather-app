@@ -202,33 +202,62 @@ function buildNowcast(minutely) {
   let startIdx = minutely.time.findIndex(t => new Date(t).getTime() > now) - 1;
   if (startIdx < 0) startIdx = 0;
 
+  // Open-Meteo minutely_15 gives ONE value per 15-min bucket. Copying that value
+  // to every minute in the bucket produces flat 15-min plateaus in the timeline —
+  // ugly, and hides trend info. We linearly interpolate between adjacent buckets
+  // instead, so the bar smoothly rises/falls even though the underlying signal
+  // is coarser. This is visual smoothing, not fake precision: intensity per hour
+  // is preserved on average.
+  const bucketValsMmH = minutely.precipitation.map(v => (v || 0) * 4);
+  const bucketTimes = minutely.time.map(t => new Date(t).getTime());
+
   const perMinute = [];
   for (let m = 0; m < 120; m++) {
     const targetMs = now + m * 60000;
-    let slot = startIdx;
-    for (let i = startIdx; i < minutely.time.length; i++) {
-      if (new Date(minutely.time[i]).getTime() <= targetMs) slot = i;
-      else break;
+
+    // Find the two bucket boundaries surrounding targetMs
+    let lo = startIdx;
+    for (let i = startIdx; i < bucketTimes.length; i++) {
+      if (bucketTimes[i] <= targetMs) lo = i; else break;
     }
-    const mm15 = minutely.precipitation[slot] || 0;
-    const mmH = mm15 * 4;
-    const wc = minutely.weather_code?.[slot];
-    perMinute.push({ minute: m, mm_per_h: +mmH.toFixed(2), weather_code: wc });
+    const hi = Math.min(lo + 1, bucketTimes.length - 1);
+
+    let mmH;
+    if (lo === hi) mmH = bucketValsMmH[lo];
+    else {
+      // linear interpolation using bucket midpoints as anchor times (bucket represents
+      // precipitation OVER the 15 min starting at its time, so midpoint = time + 7.5min)
+      const t1 = bucketTimes[lo] + 7.5 * 60000;
+      const t2 = bucketTimes[hi] + 7.5 * 60000;
+      const frac = Math.max(0, Math.min(1, (targetMs - t1) / (t2 - t1)));
+      mmH = bucketValsMmH[lo] + (bucketValsMmH[hi] - bucketValsMmH[lo]) * frac;
+    }
+
+    const wc = minutely.weather_code?.[lo];
+    perMinute.push({ minute: m, mm_per_h: +mmH.toFixed(3), weather_code: wc });
   }
 
+  // Use a MEANINGFUL threshold (0.15 mm/h ≈ imperceptible drizzle).
+  // "Rain" event only if peak crosses 0.4 mm/h at some point — anything below is just moisture noise.
+  const START_THRESHOLD = 0.15;   // minute is "wet" if >= this
+  const REAL_PEAK = 0.4;          // event must peak >= this to count
   const events = [];
   let inEv = false, evStart = 0, evPeak = 0, evPeakWC = null;
   for (let i = 0; i < perMinute.length; i++) {
     const p = perMinute[i];
-    const raining = p.mm_per_h > 0.05;
+    const raining = p.mm_per_h >= START_THRESHOLD;
     if (raining && !inEv) { inEv = true; evStart = i; evPeak = p.mm_per_h; evPeakWC = p.weather_code; }
     else if (raining) { if (p.mm_per_h > evPeak) { evPeak = p.mm_per_h; evPeakWC = p.weather_code; } }
     else if (inEv) {
       inEv = false;
-      events.push({ start_min: evStart, end_min: i - 1, peak_mm_h: +evPeak.toFixed(2), type: intensityLabel(evPeak, evPeakWC) });
+      if (evPeak >= REAL_PEAK) {
+        events.push({ start_min: evStart, end_min: i - 1, peak_mm_h: +evPeak.toFixed(2), type: intensityLabel(evPeak, evPeakWC) });
+      }
     }
   }
-  if (inEv) events.push({ start_min: evStart, end_min: 119, peak_mm_h: +evPeak.toFixed(2), type: intensityLabel(evPeak, evPeakWC), continues: true });
+  if (inEv && evPeak >= REAL_PEAK) {
+    events.push({ start_min: evStart, end_min: 119, peak_mm_h: +evPeak.toFixed(2), type: intensityLabel(evPeak, evPeakWC), continues: true });
+  }
 
   let summary;
   if (events.length === 0) summary = "No precipitation expected in the next 2 hours";
@@ -272,15 +301,15 @@ async function fetchAirQuality(lat, lon) {
 }
 
 async function fetchRadarFrames() {
-  // RainViewer publishes a small JSON manifest with the last N radar frames + a base host.
-  // Frontend uses this to render an animated tile overlay on Leaflet.
+  // RainViewer publishes a manifest with radar (precipitation) AND satellite (IR/cloud) frames.
   const r = await fetch("https://api.rainviewer.com/public/weather-maps.json");
   if (!r.ok) return null;
   const data = await r.json();
   return {
     host: data.host,
     radar_past: (data.radar?.past || []).slice(-6),
-    radar_nowcast: data.radar?.nowcast || []
+    radar_nowcast: data.radar?.nowcast || [],
+    satellite_past: (data.satellite?.infrared || []).slice(-6)  // IR = cloud proxy at night AND day
   };
 }
 

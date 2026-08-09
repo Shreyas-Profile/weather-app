@@ -340,7 +340,13 @@
 
     <!-- RADAR MAP -->
     <div class="card">
-      <div class="section-title">🗺️ Radar map</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <div class="section-title" style="margin:0">🗺️ Weather map</div>
+        <div style="display:flex;gap:4px;background:var(--panel-2);border-radius:8px;padding:3px;">
+          <button id="layer-rain" class="layer-btn active" style="background:var(--accent);color:var(--bg);border:0;padding:6px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">🌧️ Rain</button>
+          <button id="layer-cloud" class="layer-btn" style="background:transparent;color:var(--dim);border:0;padding:6px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">☁️ Clouds</button>
+        </div>
+      </div>
       <div id="radar-map" style="height:280px; border-radius:12px; overflow:hidden; background:var(--panel-2);"></div>
       <div class="sub" id="radar-time" style="text-align:center; margin-top:8px;"></div>
     </div>
@@ -525,32 +531,75 @@ function shortDay(dateStr, idx) { if (idx === 0) return "Today"; if (idx === 1) 
 function fmtTime(iso) { if (!iso) return "—"; return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }); }
 function uvLabel(uv) { if (uv < 3) return "Low"; if (uv < 6) return "Moderate"; if (uv < 8) return "High"; if (uv < 11) return "Very high"; return "Extreme"; }
 
-/* ============ RADAR MAP ============ */
-let radarMap = null, radarLayer = null, radarTimer = null, radarFrames = [], radarIdx = 0;
+/* ============ RADAR / CLOUD MAP ============ */
+let radarMap = null, radarLayer = null, radarTimer = null;
+let radarFrames = [], radarIdx = 0, radarMode = "rain", radarCache = null, userMarker = null;
+
+function buildFrames(mode) {
+  if (!radarCache) return [];
+  if (mode === "cloud") {
+    // NASA GIBS: yesterday's MODIS Terra true-color mosaic. Refreshed daily; imagery
+    // is real satellite from ~24h ago. Not live like radar, but shows genuine cloud
+    // patterns from space instead of a hidden model.
+    const y = new Date(Date.now() - 30 * 60 * 60 * 1000);  // 30h back to be safe about UTC
+    const dateStr = y.toISOString().slice(0, 10);
+    return [{ time: Math.floor(y.getTime() / 1000), _gibsDate: dateStr, _isCloud: true }];
+  }
+  return [...radarCache.radar_past, ...(radarCache.radar_nowcast || [])];
+}
+
+function frameUrl(f, mode) {
+  if (mode === "cloud" && f._gibsDate) {
+    return `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${f._gibsDate}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpeg`;
+  }
+  return `${radarCache.host}${f.path}/512/{z}/{x}/{y}/2/1_1.png`;
+}
+
 function renderRadar(radarData, lat, lon) {
   if (!window.L) { setTimeout(() => renderRadar(radarData, lat, lon), 300); return; }
-  if (!radarData || !radarData.host || !radarData.radar_past?.length) return;
+  if (!radarData || !radarData.host) return;
+  radarCache = radarData;
   const el = $("radar-map");
   if (!radarMap) {
     radarMap = L.map(el, { attributionControl: false, zoomControl: true });
     L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", { subdomains: "abcd", maxZoom: 12 }).addTo(radarMap);
   }
   radarMap.setView([lat, lon], 8);
-  L.circleMarker([lat, lon], { radius: 6, color: "#7cc4ff", fillColor: "#7cc4ff", fillOpacity: 0.8, weight: 2 }).addTo(radarMap);
+  if (userMarker) radarMap.removeLayer(userMarker);
+  userMarker = L.circleMarker([lat, lon], { radius: 6, color: "#7cc4ff", fillColor: "#7cc4ff", fillOpacity: 0.8, weight: 2 }).addTo(radarMap);
+  switchRadarLayer(radarMode);
+}
 
-  radarFrames = [...radarData.radar_past, ...(radarData.radar_nowcast || [])];
-  if (radarLayer) radarMap.removeLayer(radarLayer);
-  radarIdx = radarData.radar_past.length - 1;
+function switchRadarLayer(mode) {
+  if (!radarCache) return;
+  radarMode = mode;
+  radarFrames = buildFrames(mode);
+  if (radarFrames.length === 0) { $("radar-time").textContent = "No data for this layer"; return; }
+  // Start at most-recent past frame
+  const past = mode === "rain" ? radarCache.radar_past.length : radarFrames.length;
+  radarIdx = Math.max(0, past - 1);
   const showFrame = (i) => {
     const f = radarFrames[i]; if (!f) return;
     if (radarLayer) radarMap.removeLayer(radarLayer);
-    radarLayer = L.tileLayer(`${radarData.host}${f.path}/512/{z}/{x}/{y}/2/1_1.png`, { opacity: 0.7, tileSize: 256, maxZoom: 12 }).addTo(radarMap);
+    radarLayer = L.tileLayer(frameUrl(f, mode), { opacity: mode === "cloud" ? 0.6 : 0.75, tileSize: 256, maxZoom: 12 }).addTo(radarMap);
     const t = new Date(f.time * 1000);
-    $("radar-time").textContent = (i >= radarData.radar_past.length ? "🔮 Nowcast · " : "") + t.toLocaleTimeString();
+    if (mode === "cloud") {
+      $("radar-time").textContent = `🛰️ NASA MODIS · ${f._gibsDate} (daily satellite)`;
+    } else {
+      const isFuture = i >= radarCache.radar_past.length;
+      $("radar-time").textContent = (isFuture ? "🔮 Nowcast · " : "") + t.toLocaleTimeString();
+    }
   };
   showFrame(radarIdx);
   clearInterval(radarTimer);
-  radarTimer = setInterval(() => { radarIdx = (radarIdx + 1) % radarFrames.length; showFrame(radarIdx); }, 700);
+  if (mode === "rain" && radarFrames.length > 1) {
+    radarTimer = setInterval(() => { radarIdx = (radarIdx + 1) % radarFrames.length; showFrame(radarIdx); }, 700);
+  }
+  // Update toggle button styles
+  $("layer-rain").style.background = mode === "rain" ? "var(--accent)" : "transparent";
+  $("layer-rain").style.color = mode === "rain" ? "var(--bg)" : "var(--dim)";
+  $("layer-cloud").style.background = mode === "cloud" ? "var(--accent)" : "transparent";
+  $("layer-cloud").style.color = mode === "cloud" ? "var(--bg)" : "var(--dim)";
 }
 
 /* ============ AIR QUALITY ============ */
@@ -809,6 +858,8 @@ $("search-input").addEventListener("input", (e) => {
 });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSearch(); });
 $("refresh-btn").addEventListener("click", () => { if (activePlaceId) loadPlace(activePlaceId); });
+$("layer-rain").addEventListener("click", () => switchRadarLayer("rain"));
+$("layer-cloud").addEventListener("click", () => switchRadarLayer("cloud"));
 
 // Boot
 loadPlaces();
