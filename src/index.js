@@ -27,6 +27,7 @@ Return ONLY this JSON (no fences, no prose):
 
 Rules:
 - **Prefer Netatmo neighborhood stations over airport METAR when available** — they're closer (usually <5km vs 15km+) but be aware they're personal weather stations: some are sited badly (sun exposure, roofs, walls) and may read 2-5°C too hot. If Netatmo readings cluster tightly (spread < 2°C), trust the cluster. If one Netatmo is way hotter than nearby ones, treat it as an outlier (bad sensor placement).
+- You now receive a WIDE list of stations (up to 30 Netatmo within ~66km and up to 25 METAR within ~220km). **You choose which to use**: pick 5-10 sensors that are closest AND collectively give a tight cluster; drop obvious outliers and distant stations if closer ones already agree. Note which you used and which you dropped in the reasoning when notable.
 - Weight sensor readings by INVERSE distance squared. A station 1km away counts 100x more than one 10km away.
 - Correct for ELEVATION: temp drops ~6.5°C per 1000m elevation gain. If a sensor is 500m higher than the user, its reading is ~3°C colder than the user experiences.
 - For rain/snow/cloud state, trust satellite/radar over forecast models. Sensors can be blocked by trees, so trust them for temperature more than for sky state.
@@ -45,9 +46,11 @@ function distKm(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
 
-// Fetch nearest METAR stations within a bounding box that expands until we have enough
+// Fetch METAR stations within a broad radius so the AI can pick the useful ones.
+// We now use one wide bbox (~250 km half-width) and return up to 25 stations sorted
+// by distance. AI does the "which to trust" work; we just give it the buffet.
 async function fetchNearbyMetars(lat, lon) {
-  for (const halfDeg of [0.5, 1.0, 2.0, 4.0]) {  // ~55, 110, 220, 440 km half-widths
+  for (const halfDeg of [2.0, 4.0, 8.0]) {  // ~220, 440, 880 km — expand only if the first tier is empty
     const bbox = `${lat - halfDeg},${lon - halfDeg},${lat + halfDeg},${lon + halfDeg}`;
     const r = await fetch(`https://aviationweather.gov/api/data/metar?bbox=${bbox}&format=json`);
     if (!r.ok) continue;
@@ -57,7 +60,7 @@ async function fetchNearbyMetars(lat, lon) {
       .filter(m => m.temp != null && typeof m.lat === "number")
       .map(m => ({ ...m, distance_km: distKm(lat, lon, m.lat, m.lon) }))
       .sort((a, b) => a.distance_km - b.distance_km)
-      .slice(0, 5);
+      .slice(0, 25);
     if (withDist.length > 0) return withDist;
   }
   return [];
@@ -92,7 +95,7 @@ async function getNetatmoAccessToken(env) {
 
 async function fetchNetatmoStations(lat, lon, env) {
   if (!env.NETATMO_CLIENT_ID || !env.NETATMO_REFRESH_TOKEN) return [];
-  const halfDeg = 0.1;  // ~11km bbox
+  const halfDeg = 0.6;  // ~66km bbox — grabs neighborhood + surrounding towns
   try {
     const token = await getNetatmoAccessToken(env);
     const url = `https://api.netatmo.com/api/getpublicdata` +
@@ -133,7 +136,7 @@ async function fetchNetatmoStations(lat, lon, env) {
       });
     }
     stations.sort((a, b) => a.distance_km - b.distance_km);
-    return stations.slice(0, 8).map(s => ({ ...s, distance_km: +s.distance_km.toFixed(2) }));
+    return stations.slice(0, 30).map(s => ({ ...s, distance_km: +s.distance_km.toFixed(2) }));
   } catch (e) {
     return [];
   }
