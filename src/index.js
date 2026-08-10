@@ -146,7 +146,7 @@ async function fetchCurrentSatellite(lat, lon) {
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
               `&current=temperature_2m,apparent_temperature,cloud_cover,precipitation,rain,snowfall,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m,relative_humidity_2m,pressure_msl,uv_index,visibility` +
               `&minutely_15=precipitation,rain,snowfall,weather_code` +
-              `&hourly=temperature_2m,apparent_temperature,precipitation,precipitation_probability,weather_code,cloud_cover,wind_speed_10m,wind_direction_10m,uv_index` +
+              `&hourly=temperature_2m,apparent_temperature,precipitation,precipitation_probability,weather_code,cloud_cover,wind_speed_10m,wind_direction_10m,wind_gusts_10m,uv_index,relative_humidity_2m,pressure_msl,visibility` +
               `&daily=weather_code,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,sunrise,sunset,precipitation_sum,precipitation_probability_max,wind_speed_10m_max,wind_direction_10m_dominant,uv_index_max` +
               `&forecast_days=7&forecast_minutely_15=48&timezone=auto`;
   const r = await fetch(url);
@@ -437,8 +437,12 @@ async function handleWeather(request, env) {
       precip_prob_pct: hourly.precipitation_probability?.[i],
       cloud_cover_pct: hourly.cloud_cover?.[i],
       wind_speed_kmh: hourly.wind_speed_10m?.[i],
+      wind_gusts_kmh: hourly.wind_gusts_10m?.[i],
       wind_direction_deg: hourly.wind_direction_10m?.[i],
-      uv_index: hourly.uv_index?.[i]
+      uv_index: hourly.uv_index?.[i],
+      humidity_pct: hourly.relative_humidity_2m?.[i],
+      pressure_hpa: hourly.pressure_msl?.[i],
+      visibility_m: hourly.visibility?.[i]
     });
   }
 

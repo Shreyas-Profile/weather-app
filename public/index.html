@@ -175,6 +175,21 @@
   .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(115px, 1fr)); gap: 10px; }
   .stat { background: var(--panel-2); border-radius: 12px; padding: 12px 14px; transition: background 0.15s; }
   .stat:hover { background: var(--panel-hover); }
+  .stat.clickable { cursor: pointer; }
+  .stat.clickable:hover { transform: translateY(-1px); box-shadow: 0 4px 10px rgba(0,0,0,0.15); }
+
+  /* Chart modal */
+  .chart-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 200;
+    display: none; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(4px); }
+  .chart-modal.open { display: flex; }
+  .chart-box { background: var(--bg); border: 1px solid var(--border); border-radius: 16px;
+    width: 100%; max-width: 620px; padding: 20px; box-shadow: var(--shadow); }
+  .chart-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+  .chart-title { font-size: 16px; font-weight: 600; display: flex; gap: 8px; align-items: center; }
+  .chart-close { background: var(--panel-2); border: 0; color: var(--text); width: 32px; height: 32px; border-radius: 50%; cursor: pointer; font-size: 18px; }
+  .chart-svg { width: 100%; height: 220px; }
+  .chart-legend { font-size: 12px; color: var(--dim); margin-top: 10px; display: flex; justify-content: space-between; }
+  .chart-current { font-size: 13px; color: var(--accent); text-align: center; margin-top: 10px; }
   .stat-label { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 4px; }
   .stat-val { font-size: 18px; font-weight: 500; margin-top: 6px; display: flex; align-items: baseline; gap: 4px; }
   .stat-unit { font-size: 11px; color: var(--dim); font-weight: 400; }
@@ -381,6 +396,19 @@
   </div>
 </div>
 
+<!-- Chart modal (clicked from a stat card) -->
+<div class="chart-modal" id="chart-modal">
+  <div class="chart-box">
+    <div class="chart-head">
+      <div class="chart-title" id="chart-title">—</div>
+      <button class="chart-close" id="chart-close">✕</button>
+    </div>
+    <svg class="chart-svg" id="chart-svg" viewBox="0 0 600 220" preserveAspectRatio="none"></svg>
+    <div class="chart-legend" id="chart-legend"></div>
+    <div class="chart-current" id="chart-current"></div>
+  </div>
+</div>
+
 <!-- Search modal -->
 <div class="search-modal" id="search-modal">
   <div class="search-box">
@@ -531,6 +559,100 @@ function shortDay(dateStr, idx) { if (idx === 0) return "Today"; if (idx === 1) 
 function fmtTime(iso) { if (!iso) return "—"; return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }); }
 function uvLabel(uv) { if (uv < 3) return "Low"; if (uv < 6) return "Moderate"; if (uv < 8) return "High"; if (uv < 11) return "Very high"; return "Extreme"; }
 
+/* ============ 24H CHART MODAL ============ */
+// Each chart shows the variable across the currently-selected day (from the
+// hourly forecast). SVG line + area fill. No library — 100 LOC of geometry.
+const CHART_METRICS = {
+  temp:      { title: "Temperature",   icon: "🌡️", unit: "°C",   key: "temp_c",         color: "#ff9057", fmt: v => v.toFixed(1) },
+  feels:     { title: "Feels like",    icon: "🌡️", unit: "°C",   key: "feels_like_c",   color: "#ff7c9c", fmt: v => v.toFixed(1) },
+  humidity:  { title: "Humidity",      icon: "💧", unit: "%",    key: "humidity_pct",   color: "#7cc4ff", fmt: v => v.toFixed(0) },
+  pressure:  { title: "Pressure",      icon: "📊", unit: "hPa",  key: "pressure_hpa",   color: "#a78bfa", fmt: v => v.toFixed(0) },
+  uv:        { title: "UV Index",      icon: "🔆", unit: "",     key: "uv_index",       color: "#ffb454", fmt: v => v.toFixed(1) },
+  visibility:{ title: "Visibility",    icon: "👁️", unit: "km",   key: "visibility_m",   color: "#7cffb4", fmt: v => (v/1000).toFixed(0), scale: v => v/1000 },
+  cloud:     { title: "Cloud cover",   icon: "☁️", unit: "%",    key: "cloud_cover_pct",color: "#8891ac", fmt: v => v.toFixed(0) },
+  wind:      { title: "Wind speed",    icon: "💨", unit: "km/h", key: "wind_speed_kmh", color: "#7cc4ff", fmt: v => v.toFixed(0) },
+  precip:    { title: "Precipitation", icon: "🌧️", unit: "mm",   key: "precip_mm",      color: "#7cc4ff", fmt: v => v.toFixed(1) },
+  precipProb:{ title: "Rain chance",   icon: "☔", unit: "%",    key: "precip_prob_pct",color: "#7cc4ff", fmt: v => v.toFixed(0) },
+};
+
+function openChart(metricKey) {
+  const m = CHART_METRICS[metricKey];
+  if (!m || !currentData) return;
+  const f = currentData.forecast || {};
+  const dayIdx = selectedDayIdx;
+  const dayDate = f.daily?.[dayIdx]?.date;
+  if (!dayDate) return;
+  const hours = (f.hourly || []).filter(h => h.time.startsWith(dayDate));
+  const scale = m.scale || (v => v);
+  const points = hours.map(h => ({ t: new Date(h.time), v: h[m.key] == null ? null : scale(h[m.key]) })).filter(p => p.v != null);
+  if (points.length < 2) return;
+
+  const W = 600, H = 220, padL = 40, padR = 20, padT = 20, padB = 40;
+  const values = points.map(p => p.v);
+  const vMin = Math.min(...values), vMax = Math.max(...values);
+  const vRange = Math.max(0.1, vMax - vMin);
+  // Pad the vertical range slightly so line doesn't touch edges
+  const yMin = vMin - vRange * 0.1;
+  const yMax = vMax + vRange * 0.1;
+  const yRange = yMax - yMin;
+
+  const x = (i) => padL + ((W - padL - padR) * i) / (points.length - 1);
+  const y = (v) => padT + (H - padT - padB) * (1 - (v - yMin) / yRange);
+
+  // Smooth cardinal-like curve via bezier control points
+  let d = `M ${x(0).toFixed(1)} ${y(points[0].v).toFixed(1)}`;
+  for (let i = 1; i < points.length; i++) {
+    const midX = (x(i - 1) + x(i)) / 2;
+    d += ` C ${midX.toFixed(1)} ${y(points[i-1].v).toFixed(1)}, ${midX.toFixed(1)} ${y(points[i].v).toFixed(1)}, ${x(i).toFixed(1)} ${y(points[i].v).toFixed(1)}`;
+  }
+
+  // Area fill path (line + close to bottom)
+  const area = d + ` L ${x(points.length - 1).toFixed(1)} ${(H - padB).toFixed(1)} L ${x(0).toFixed(1)} ${(H - padB).toFixed(1)} Z`;
+
+  // Y-axis gridlines (4 rows)
+  let gridLines = "";
+  for (let i = 0; i <= 3; i++) {
+    const gv = yMin + (yRange * i) / 3;
+    const gy = y(gv);
+    gridLines += `<line x1="${padL}" x2="${W - padR}" y1="${gy}" y2="${gy}" stroke="var(--border)" stroke-dasharray="2 3"/>`;
+    gridLines += `<text x="${padL - 6}" y="${gy + 3}" text-anchor="end" font-size="10" fill="var(--dim)">${m.fmt(gv)}${m.unit}</text>`;
+  }
+
+  // X-axis labels every 3 hours
+  let xLabels = "";
+  for (let i = 0; i < points.length; i += 3) {
+    const p = points[i];
+    const hr = p.t.getHours();
+    const label = hr === 0 ? "12a" : hr < 12 ? `${hr}a` : hr === 12 ? "12p" : `${hr-12}p`;
+    xLabels += `<text x="${x(i)}" y="${H - padB + 16}" text-anchor="middle" font-size="10" fill="var(--dim)">${label}</text>`;
+  }
+
+  // "Now" marker: find the closest hour to right now
+  let nowMarker = "";
+  const nowMs = Date.now();
+  const nowIdx = points.findIndex(p => p.t.getTime() > nowMs);
+  if (nowIdx > 0) {
+    const nx = x(nowIdx - 1);
+    nowMarker = `
+      <line x1="${nx}" x2="${nx}" y1="${padT}" y2="${H - padB}" stroke="${m.color}" stroke-width="1" stroke-dasharray="4 3" opacity="0.7"/>
+      <circle cx="${nx}" cy="${y(points[nowIdx-1].v)}" r="4" fill="${m.color}" stroke="var(--bg)" stroke-width="2"/>`;
+  }
+
+  const svg = `
+    ${gridLines}
+    <path d="${area}" fill="${m.color}" fill-opacity="0.15"/>
+    <path d="${d}" fill="none" stroke="${m.color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    ${xLabels}
+    ${nowMarker}
+  `;
+  $("chart-svg").innerHTML = svg;
+  $("chart-title").innerHTML = `<span>${m.icon}</span><span>${m.title} · ${dayIdx === 0 ? "Today" : dayIdx === 1 ? "Tomorrow" : new Date(dayDate).toLocaleDateString(undefined,{weekday:"long"})}</span>`;
+  $("chart-legend").innerHTML = `<span>Min: ${m.fmt(vMin)}${m.unit}</span><span>Max: ${m.fmt(vMax)}${m.unit}</span>`;
+  const cur = nowIdx > 0 ? points[nowIdx-1].v : null;
+  $("chart-current").textContent = cur != null ? `Now: ${m.fmt(cur)}${m.unit}` : "";
+  $("chart-modal").classList.add("open");
+}
+
 /* ============ RADAR / CLOUD MAP ============ */
 let radarMap = null, radarLayer = null, radarTimer = null;
 let radarFrames = [], radarIdx = 0, radarMode = "rain", radarCache = null, userMarker = null;
@@ -563,7 +685,13 @@ function renderRadar(radarData, lat, lon) {
   if (!radarMap) {
     radarMap = L.map(el, { attributionControl: false, zoomControl: true });
     L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", { subdomains: "abcd", maxZoom: 12 }).addTo(radarMap);
+    // Leaflet locks to the container size at init. If the card was hidden or narrower
+    // when we created the map, tiles anchor to that (small) rect. Invalidate whenever
+    // the card resizes, and again shortly after this render to catch late-visible cases.
+    if (window.ResizeObserver) new ResizeObserver(() => radarMap.invalidateSize()).observe(el);
   }
+  requestAnimationFrame(() => radarMap.invalidateSize());
+  setTimeout(() => radarMap.invalidateSize(), 400);
   radarMap.setView([lat, lon], 8);
   if (userMarker) radarMap.removeLayer(userMarker);
   userMarker = L.circleMarker([lat, lon], { radius: 6, color: "#7cc4ff", fillColor: "#7cc4ff", fillOpacity: 0.8, weight: 2 }).addTo(radarMap);
@@ -751,18 +879,22 @@ function render(data, place) {
   } else $("wind-card").style.display = "none";
 
   const stats = [];
-  if (sat.humidity_pct != null) stats.push({ icon: "💧", label: "Humidity", val: fmt(sat.humidity_pct, 0), unit: "%" });
-  if (sat.pressure_hpa != null) stats.push({ icon: "📊", label: "Pressure", val: fmt(sat.pressure_hpa, 0), unit: "hPa" });
+  if (sat.humidity_pct != null) stats.push({ metric: "humidity", icon: "💧", label: "Humidity", val: fmt(sat.humidity_pct, 0), unit: "%" });
+  if (sat.pressure_hpa != null) stats.push({ metric: "pressure", icon: "📊", label: "Pressure", val: fmt(sat.pressure_hpa, 0), unit: "hPa" });
   if (sat.uv_index != null) {
     const uvPct = Math.min(100, (sat.uv_index / 11) * 100);
-    stats.push({ icon: "🔆", label: "UV Index", val: fmt(sat.uv_index, 1), unit: "", extra: uvLabel(sat.uv_index),
+    stats.push({ metric: "uv", icon: "🔆", label: "UV Index", val: fmt(sat.uv_index, 1), unit: "", extra: uvLabel(sat.uv_index),
       html: `<div class="uv-bar-wrap"><div class="uv-bar"><div class="uv-marker" style="left:${uvPct}%"></div></div></div>` });
   }
-  if (sat.visibility_m != null) stats.push({ icon: "👁️", label: "Visibility", val: fmt(sat.visibility_m / 1000, 0), unit: "km" });
-  if (sat.cloud_cover_pct != null) stats.push({ icon: "☁️", label: "Cloud cover", val: fmt(sat.cloud_cover_pct, 0), unit: "%" });
-  if (sat.precipitation_mm > 0) stats.push({ icon: "🌧️", label: "Precip now", val: fmt(sat.precipitation_mm, 2), unit: "mm" });
+  if (sat.visibility_m != null) stats.push({ metric: "visibility", icon: "👁️", label: "Visibility", val: fmt(sat.visibility_m / 1000, 0), unit: "km" });
+  if (sat.cloud_cover_pct != null) stats.push({ metric: "cloud", icon: "☁️", label: "Cloud cover", val: fmt(sat.cloud_cover_pct, 0), unit: "%" });
+  if (sat.wind_speed_kmh != null) stats.push({ metric: "wind", icon: "💨", label: "Wind speed", val: fmt(sat.wind_speed_kmh, 0), unit: "km/h" });
+  if (sat.precipitation_mm > 0) stats.push({ metric: "precip", icon: "🌧️", label: "Precip now", val: fmt(sat.precipitation_mm, 2), unit: "mm" });
   if (sat.snowfall_cm > 0) stats.push({ icon: "❄️", label: "Snow now", val: fmt(sat.snowfall_cm, 1), unit: "cm" });
-  $("stats").innerHTML = stats.map(x => `<div class="stat"><div class="stat-label">${x.icon} ${x.label}</div><div class="stat-val">${x.val}<span class="stat-unit">${x.unit}</span></div>${x.extra ? `<div class="stat-extra">${x.extra}</div>` : ""}${x.html || ""}</div>`).join("");
+  $("stats").innerHTML = stats.map(x => `<div class="stat${x.metric ? " clickable" : ""}"${x.metric ? ` data-metric="${x.metric}"` : ""}><div class="stat-label">${x.icon} ${x.label}${x.metric ? ' <span style="margin-left:auto;font-size:9px;color:var(--dim);opacity:0.6">📈</span>' : ""}</div><div class="stat-val">${x.val}<span class="stat-unit">${x.unit}</span></div>${x.extra ? `<div class="stat-extra">${x.extra}</div>` : ""}${x.html || ""}</div>`).join("");
+  document.querySelectorAll(".stat.clickable").forEach(el => {
+    el.addEventListener("click", () => openChart(el.dataset.metric));
+  });
 
   // Daily
   const allTemps = (f.daily || []).flatMap(d => [d.temp_min_c, d.temp_max_c]).filter(x => x != null);
@@ -860,6 +992,9 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSearc
 $("refresh-btn").addEventListener("click", () => { if (activePlaceId) loadPlace(activePlaceId); });
 $("layer-rain").addEventListener("click", () => switchRadarLayer("rain"));
 $("layer-cloud").addEventListener("click", () => switchRadarLayer("cloud"));
+$("chart-close").addEventListener("click", () => $("chart-modal").classList.remove("open"));
+$("chart-modal").addEventListener("click", (e) => { if (e.target.id === "chart-modal") $("chart-modal").classList.remove("open"); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("chart-modal").classList.remove("open"); });
 
 // Boot
 loadPlaces();
