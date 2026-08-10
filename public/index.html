@@ -582,7 +582,15 @@ function openChart(metricKey) {
   const dayIdx = selectedDayIdx;
   const dayDate = f.daily?.[dayIdx]?.date;
   if (!dayDate) return;
-  const hours = (f.hourly || []).filter(h => h.time.startsWith(dayDate));
+  // Only chart from "now" forward when the selected day is TODAY — no reason to
+  // show past-morning weather that already happened. Future days show the full day.
+  const nowMs = Date.now();
+  const isToday = dayIdx === 0;
+  const hours = (f.hourly || []).filter(h => {
+    if (!h.time.startsWith(dayDate)) return false;
+    if (isToday && new Date(h.time).getTime() + 30 * 60 * 1000 < nowMs) return false;  // drop hours already >30min in the past
+    return true;
+  });
   const scale = m.scale || (v => v);
   const points = hours.map(h => ({ t: new Date(h.time), v: h[m.key] == null ? null : scale(h[m.key]) })).filter(p => p.v != null);
   if (points.length < 2) return;
